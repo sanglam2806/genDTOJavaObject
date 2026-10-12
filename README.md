@@ -19,39 +19,70 @@ If a file already exists, it is skipped (`SKIP (exists)`). To generate it again,
 ## Project layout
 
 ```
-freemarker-2.3.34.jar                  FreeMarker library (the only dependency)
+freemarker-2.3.34.jar                  FreeMarker library
+lib/                                   JDBC driver jars (Oracle / PostgreSQL / MySQL)
+codegen.properties                     Database connections and defaults
+gen.sh, gen.bat                        Build and run without Gradle
 src/main/java/com/mitsuru/codegen/
-  CodegenApplication.java              Generator (main class)
+  CodegenApplication.java              Generator (main class, command-line options)
+  DbHub.java                           Opens the connection for the selected database
+  TableReader.java                     Reads columns from JDBC metadata, maps types
 src/main/resources/templates/
   Dto.ftl, DtoImpl.ftl, Hbm.ftl        FreeMarker templates
 ```
 
 ## Configuration
 
-Edit the constants at the top of `CodegenApplication.java`:
+Table definitions are read from the database: column names, comments, data types, primary key and `NOT NULL`. Nothing is hard-coded.
 
-| Constant | Meaning |
-|---|---|
-| `TABLE_NAME` | Table name. It is converted to the class name: `com_mitsuru_na` → `ComMitsuruNa` |
-| `PACKAGE` | Package of the generated code |
-| `COLUMNS` | Column names (`snake_case`, converted to `camelCase` properties) |
-| `TYPES` | DB type of each column |
-| `COMMENTS` | Comment for each column |
-| `SIZES` | Number of digits (used only for `NUMBER`) |
+Connections are set in `codegen.properties` (in the project root). Each database has its own settings, so you switch databases by changing only `db`:
 
-The primary key columns are set in `getColumns()` (`key.add("id")`). Primary key columns are `not-null`; the other columns are nullable.
+```properties
+db=postgres                 # oracle | postgres | mysql
 
-`COLUMNS`, `TYPES`, `COMMENTS` and `SIZES` must have the same number of items, in the same order.
+package=com.mitsuru.gen     # package of the generated code
+out=src/main/java           # output root
+
+oracle.url=jdbc:oracle:thin:@localhost:1521/XEPDB1
+oracle.user=system
+oracle.password=
+oracle.schema=              # optional, default: login user's schema
+
+postgres.url=jdbc:postgresql://localhost:5432/postgres
+postgres.user=postgres
+postgres.password=
+postgres.schema=            # optional, default: current schema (public)
+
+mysql.url=jdbc:mysql://localhost:3306/test   # database in the URL is used
+mysql.user=root
+mysql.password=
+```
+
+Table names are not case sensitive (`COM_MITSURU_NA` finds `com_mitsuru_na` in PostgreSQL). The class name comes from the table name: `com_mitsuru_na` → `ComMitsuruNa`.
+
+### Command-line options
+
+```
+gen [--db=oracle|postgres|mysql] [--package=...] [--out=...] [--config=...] TABLE [TABLE...]
+```
+
+Options override `codegen.properties`. You can pass several tables at once.
 
 ### Type mapping
 
+Types are mapped from the JDBC type, so they work the same way for all three databases.
+
 | DB type | Java type | Hibernate type |
 |---|---|---|
-| `VARCHAR*`, `NVARCHAR*`, `CHAR` | `String` | `string` |
-| `NUMBER` (size ≤ 9) | `Integer` | `integer` |
-| `NUMBER` (size ≤ 18) | `Long` | `long` |
-| `NUMBER` (size > 18) | `java.math.BigDecimal` | `big_decimal` |
-| `DATE`, `TIMESTAMP*` | `java.util.Date` | `timestamp` |
+| `CHAR`, `VARCHAR`, `VARCHAR2`, `NVARCHAR*`, `TEXT` | `String` | `string` |
+| `CLOB`, `NCLOB`, `LONGTEXT` | `String` | `text` |
+| `NUMBER`/`NUMERIC`/`DECIMAL` without scale (precision ≤ 9), `INT`, `SMALLINT`, `TINYINT` | `Integer` | `integer` |
+| `NUMBER`/`NUMERIC` (precision ≤ 18), `BIGINT` | `Long` | `long` |
+| `NUMBER`/`NUMERIC` (precision > 18, with scale, or no precision) | `java.math.BigDecimal` | `big_decimal` |
+| `BOOLEAN`, `BIT(1)`, MySQL `TINYINT(1)` | `Boolean` | `boolean` |
+| `REAL`, `FLOAT`, `DOUBLE` | `Double` | `double` |
+| `DATE`, `TIME`, `TIMESTAMP*`, `DATETIME` | `java.util.Date` | `timestamp` |
+| `BLOB`, `BYTEA`, `RAW`, `VARBINARY` | `byte[]` | `binary` |
 
 Any other type stops the generator with `IllegalArgumentException: Unmapped type`.
 
@@ -59,32 +90,41 @@ Any other type stops the generator with `IllegalArgumentException: Unmapped type
 
 Run all commands from the project root. The output path is relative to the current directory.
 
-### Without Gradle or Maven (javac only)
+### JDBC drivers
 
-Requires Java 8 or later.
+The driver jar for your database must be in `lib/`. If you have Gradle, this copies all three:
+
+```bash
+./gradlew copyDrivers
+```
+
+Without Gradle, download them from Maven Central and put them in `lib/`: `com.oracle.database.jdbc:ojdbc11` (or `ojdbc8` for Java 8), `org.postgresql:postgresql`, `com.mysql:mysql-connector-j`.
+
+### Without Gradle or Maven (script)
+
+Requires Java 8 or later. The script compiles the generator into `out/` and runs it.
 
 macOS / Linux:
 
 ```bash
-javac -encoding UTF-8 -cp freemarker-2.3.34.jar -d out src/main/java/com/mitsuru/codegen/CodegenApplication.java
-java -cp out:src/main/resources:freemarker-2.3.34.jar com.mitsuru.codegen.CodegenApplication
+./gen.sh COM_MITSURU_NA
+./gen.sh --db=oracle COM_MITSURU_NA ORDER_ITEM
 ```
 
-Windows (use `;` instead of `:`):
+Windows:
 
 ```bat
-javac -encoding UTF-8 -cp freemarker-2.3.34.jar -d out src\main\java\com\mitsuru\codegen\CodegenApplication.java
-java -cp out;src\main\resources;freemarker-2.3.34.jar com.mitsuru.codegen.CodegenApplication
+gen.bat COM_MITSURU_NA
+gen.bat --db=mysql --package=com.example order_item
 ```
 
-`src/main/resources` must be on the classpath because the templates are loaded from `/templates` on the classpath.
-
-In an IDE, add `freemarker-2.3.34.jar` as a library (Eclipse: Build Path → Add External JARs; IntelliJ IDEA: Project Structure → Libraries) and make sure the `templates` folder is on the classpath.
+In an IDE, add `freemarker-2.3.34.jar` and the jars in `lib/` as libraries, make sure the `templates` folder is on the classpath, and set the table names as program arguments.
 
 ### With Gradle
 
 ```bash
-./gradlew bootRun
+./gradlew bootRun --args="COM_MITSURU_NA"
+./gradlew bootRun --args="--db=oracle COM_MITSURU_NA ORDER_ITEM"
 ```
 
 ## Customizing templates
@@ -95,7 +135,7 @@ The templates can use these values:
 |---|---|
 | `pkg` | Package name |
 | `cls` | Class name (e.g. `ComMitsuruNa`) |
-| `table` | Table name in upper case |
+| `table` | Table name as stored in the database |
 | `cols` | List of columns |
 
 Each item in `cols` has:
@@ -112,5 +152,4 @@ Each item in `cols` has:
 
 ## Limitations
 
-- The column definitions are hard-coded. Reading them from the database is not implemented yet.
-- `nullable` is not read from the database; every non-key column is treated as nullable.
+- A table with a composite primary key gets several `<id>` elements in the `.hbm.xml`, which Hibernate does not accept. Change it to `<composite-id>` by hand.

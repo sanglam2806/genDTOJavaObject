@@ -19,39 +19,70 @@
 ## 構成
 
 ```
-freemarker-2.3.34.jar                  FreeMarker ライブラリ(唯一の依存ライブラリ)
+freemarker-2.3.34.jar                  FreeMarker ライブラリ
+lib/                                   JDBC ドライバーの JAR(Oracle / PostgreSQL / MySQL)
+codegen.properties                     DB 接続とデフォルト設定
+gen.sh, gen.bat                        Gradle を使わずにビルド・実行するスクリプト
 src/main/java/com/mitsuru/codegen/
-  CodegenApplication.java              ジェネレーター(メインクラス)
+  CodegenApplication.java              ジェネレーター(メインクラス、コマンドライン引数)
+  DbHub.java                           選択した DB への接続を作成
+  TableReader.java                     JDBC メタデータからカラムを読み込み、型を変換
 src/main/resources/templates/
   Dto.ftl, DtoImpl.ftl, Hbm.ftl        FreeMarker テンプレート
 ```
 
 ## 設定
 
-`CodegenApplication.java` の先頭にある定数を編集します。
+テーブル定義(カラム名、コメント、データ型、主キー、`NOT NULL`)はデータベースから読み込みます。コード内に固定値はありません。
 
-| 定数 | 意味 |
-|---|---|
-| `TABLE_NAME` | テーブル名。クラス名に変換されます:`com_mitsuru_na` → `ComMitsuruNa` |
-| `PACKAGE` | 生成コードのパッケージ |
-| `COLUMNS` | カラム名(`snake_case`。`camelCase` のプロパティ名に変換されます) |
-| `TYPES` | 各カラムの DB 型 |
-| `COMMENTS` | 各カラムのコメント |
-| `SIZES` | 桁数(`NUMBER` の場合のみ使用) |
+接続はプロジェクトのルートにある `codegen.properties` で設定します。DB ごとに設定を持つため、`db` を変更するだけで切り替えられます。
 
-主キーのカラムは `getColumns()` 内で指定します(`key.add("id")`)。主キーは `not-null`、それ以外のカラムは null 許可になります。
+```properties
+db=postgres                 # oracle | postgres | mysql
 
-`COLUMNS`、`TYPES`、`COMMENTS`、`SIZES` は同じ件数・同じ順番にしてください。
+package=com.mitsuru.gen     # 生成コードのパッケージ
+out=src/main/java           # 出力先のルート
+
+oracle.url=jdbc:oracle:thin:@localhost:1521/XEPDB1
+oracle.user=system
+oracle.password=
+oracle.schema=              # 省略可。デフォルトはログインユーザーのスキーマ
+
+postgres.url=jdbc:postgresql://localhost:5432/postgres
+postgres.user=postgres
+postgres.password=
+postgres.schema=            # 省略可。デフォルトは現在のスキーマ(public)
+
+mysql.url=jdbc:mysql://localhost:3306/test   # URL のデータベースを使用
+mysql.user=root
+mysql.password=
+```
+
+テーブル名の大文字・小文字は区別しません(`COM_MITSURU_NA` で PostgreSQL の `com_mitsuru_na` も見つかります)。クラス名はテーブル名から作られます:`com_mitsuru_na` → `ComMitsuruNa`。
+
+### コマンドライン引数
+
+```
+gen [--db=oracle|postgres|mysql] [--package=...] [--out=...] [--config=...] TABLE [TABLE...]
+```
+
+オプションは `codegen.properties` の値より優先されます。テーブルは複数指定できます。
 
 ### 型の対応
 
+JDBC の型から変換するため、3 つの DB で同じように動作します。
+
 | DB 型 | Java 型 | Hibernate 型 |
 |---|---|---|
-| `VARCHAR*`、`NVARCHAR*`、`CHAR` | `String` | `string` |
-| `NUMBER`(桁数 ≤ 9) | `Integer` | `integer` |
-| `NUMBER`(桁数 ≤ 18) | `Long` | `long` |
-| `NUMBER`(桁数 > 18) | `java.math.BigDecimal` | `big_decimal` |
-| `DATE`、`TIMESTAMP*` | `java.util.Date` | `timestamp` |
+| `CHAR`、`VARCHAR`、`VARCHAR2`、`NVARCHAR*`、`TEXT` | `String` | `string` |
+| `CLOB`、`NCLOB`、`LONGTEXT` | `String` | `text` |
+| 小数部なしの `NUMBER`/`NUMERIC`/`DECIMAL`(桁数 ≤ 9)、`INT`、`SMALLINT`、`TINYINT` | `Integer` | `integer` |
+| `NUMBER`/`NUMERIC`(桁数 ≤ 18)、`BIGINT` | `Long` | `long` |
+| `NUMBER`/`NUMERIC`(桁数 > 18、小数部あり、桁数指定なし) | `java.math.BigDecimal` | `big_decimal` |
+| `BOOLEAN`、`BIT(1)`、MySQL の `TINYINT(1)` | `Boolean` | `boolean` |
+| `REAL`、`FLOAT`、`DOUBLE` | `Double` | `double` |
+| `DATE`、`TIME`、`TIMESTAMP*`、`DATETIME` | `java.util.Date` | `timestamp` |
+| `BLOB`、`BYTEA`、`RAW`、`VARBINARY` | `byte[]` | `binary` |
 
 上記以外の型の場合、`IllegalArgumentException: Unmapped type` で処理が停止します。
 
@@ -59,32 +90,41 @@ src/main/resources/templates/
 
 コマンドはすべてプロジェクトのルートで実行してください。出力先はカレントディレクトリからの相対パスです。
 
-### Gradle / Maven を使わない場合(javac のみ)
+### JDBC ドライバー
 
-Java 8 以上が必要です。
+使用する DB のドライバー JAR を `lib/` に置いてください。Gradle があれば、次のコマンドで 3 つともコピーされます。
+
+```bash
+./gradlew copyDrivers
+```
+
+Gradle がない場合は Maven Central からダウンロードして `lib/` に置きます:`com.oracle.database.jdbc:ojdbc11`(Java 8 の場合は `ojdbc8`)、`org.postgresql:postgresql`、`com.mysql:mysql-connector-j`。
+
+### Gradle / Maven を使わない場合(スクリプト)
+
+Java 8 以上が必要です。スクリプトはジェネレーターを `out/` にコンパイルしてから実行します。
 
 macOS / Linux:
 
 ```bash
-javac -encoding UTF-8 -cp freemarker-2.3.34.jar -d out src/main/java/com/mitsuru/codegen/CodegenApplication.java
-java -cp out:src/main/resources:freemarker-2.3.34.jar com.mitsuru.codegen.CodegenApplication
+./gen.sh COM_MITSURU_NA
+./gen.sh --db=oracle COM_MITSURU_NA ORDER_ITEM
 ```
 
-Windows(`:` の代わりに `;` を使います):
+Windows:
 
 ```bat
-javac -encoding UTF-8 -cp freemarker-2.3.34.jar -d out src\main\java\com\mitsuru\codegen\CodegenApplication.java
-java -cp out;src\main\resources;freemarker-2.3.34.jar com.mitsuru.codegen.CodegenApplication
+gen.bat COM_MITSURU_NA
+gen.bat --db=mysql --package=com.example order_item
 ```
 
-テンプレートはクラスパス上の `/templates` から読み込まれるため、`src/main/resources` をクラスパスに含める必要があります。
-
-IDE を使う場合は、`freemarker-2.3.34.jar` をライブラリとして追加し(Eclipse:ビルド・パス → 外部 JAR の追加、IntelliJ IDEA:Project Structure → Libraries)、`templates` フォルダーがクラスパスに含まれていることを確認してください。
+IDE を使う場合は、`freemarker-2.3.34.jar` と `lib/` の JAR をライブラリとして追加し、`templates` フォルダーがクラスパスに含まれていることを確認して、テーブル名をプログラム引数に指定してください。
 
 ### Gradle を使う場合
 
 ```bash
-./gradlew bootRun
+./gradlew bootRun --args="COM_MITSURU_NA"
+./gradlew bootRun --args="--db=oracle COM_MITSURU_NA ORDER_ITEM"
 ```
 
 ## テンプレートのカスタマイズ
@@ -95,7 +135,7 @@ IDE を使う場合は、`freemarker-2.3.34.jar` をライブラリとして追�
 |---|---|
 | `pkg` | パッケージ名 |
 | `cls` | クラス名(例:`ComMitsuruNa`) |
-| `table` | テーブル名(大文字) |
+| `table` | データベース上のテーブル名 |
 | `cols` | カラムのリスト |
 
 `cols` の各要素:
@@ -112,5 +152,4 @@ IDE を使う場合は、`freemarker-2.3.34.jar` をライブラリとして追�
 
 ## 制限事項
 
-- カラム定義はコード内に固定で書かれています。データベースからの読み込みはまだ実装されていません。
-- `nullable` はデータベースから取得していません。主キー以外のカラムはすべて null 許可として扱われます。
+- 複合主キーのテーブルでは `.hbm.xml` に `<id>` が複数出力されますが、Hibernate では使用できません。手動で `<composite-id>` に変更してください。

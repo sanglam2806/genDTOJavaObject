@@ -19,12 +19,24 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-freemarker'
+	// JDBC drivers used to read table definitions (versions come from Spring Boot)
+	runtimeOnly 'com.oracle.database.jdbc:ojdbc11'
+	runtimeOnly 'org.postgresql:postgresql'
+	runtimeOnly 'com.mysql:mysql-connector-j'
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-freemarker-test'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+// Copy the JDBC drivers into lib/ so gen.sh / gen.bat can use them
+tasks.register('copyDrivers', Copy) {
+	from(configurations.runtimeClasspath) {
+		include 'ojdbc*.jar', 'postgresql-*.jar', 'mysql-connector-j-*.jar'
+	}
+	into 'lib'
 }
 
 tasks.named('test') {
