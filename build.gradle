@@ -33,6 +33,14 @@ dependencies {
 	testAnnotationProcessor 'org.projectlombok:lombok'
 }
 
+// Mockito's agent, loaded at JVM start (dynamic loading prints a warning on Java 21+)
+configurations {
+	mockitoAgent
+}
+dependencies {
+	mockitoAgent('org.mockito:mockito-core') { transitive = false }
+}
+
 // Copy the JDBC drivers into lib/ so gen.sh / gen.bat can use them
 tasks.register('copyDrivers', Copy) {
 	from(configurations.runtimeClasspath) {
@@ -41,8 +49,17 @@ tasks.register('copyDrivers', Copy) {
 	into 'lib'
 }
 
+// Copy test libraries into lib/: H2 (in-memory test DB) and Mockito with its dependencies
+tasks.register('copyTestLibs', Copy) {
+	from(configurations.testRuntimeClasspath) {
+		include 'h2-*.jar', 'mockito-*.jar', 'byte-buddy-*.jar', 'objenesis-*.jar'
+	}
+	into 'lib'
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
+	jvmArgs "-javaagent:${configurations.mockitoAgent.asPath}"
 	// always re-run tests so the log events are printed every time
 	outputs.upToDateWhen { false }
 	testLogging {
